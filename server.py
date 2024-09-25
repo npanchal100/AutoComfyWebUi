@@ -28,6 +28,7 @@ import comfy.model_management
 import node_helpers
 from app.frontend_management import FrontendManager
 from app.user_manager import UserManager
+from urllib.parse import unquote
 
 
 class BinaryEventTypes:
@@ -147,6 +148,7 @@ class PromptServer():
                     name) + "/" + os.path.relpath(f, dir).replace("\\", "/"), files)))
 
             return web.json_response(extensions)
+
 
         def get_dir_by_type(dir_type):
             if dir_type is None:
@@ -555,6 +557,51 @@ class PromptServer():
                     self.prompt_queue.delete_history_item(id_to_delete)
 
             return web.Response(status=200)
+        # Helper function to get the output directory
+        def get_output_directory():
+            return "F:/ComfyUI_windows_portable/ComfyUI/output/flux2024-09-25"
+
+        @routes.get('/download_image')
+        async def download_image(request):
+            image_path = request.query.get('image_path')
+            logging.info(f"Received download request for image_path: {image_path}")
+
+            if not image_path:
+                logging.error("No image_path provided in download_image request.")
+                return web.Response(text="No image_path provided", status=400)
+
+            # Decode the URL-encoded path
+            image_path = unquote(image_path)
+            logging.info(f"Decoded image_path: {image_path}")
+
+            if not os.path.exists(image_path):
+                logging.warning(f"Image not found: {image_path}")
+                return web.Response(text="Image not found", status=404)
+
+            logging.info(f"Serving image: {image_path}")
+
+            # Determine the MIME type based on the file extension
+            mime_type = 'application/octet-stream'  # Default MIME type
+            extension = os.path.splitext(image_path)[1].lower()
+            if extension in ['.jpg', '.jpeg']:
+                mime_type = 'image/jpeg'
+            elif extension == '.png':
+                mime_type = 'image/png'
+            elif extension == '.webp':
+                mime_type = 'image/webp'
+            elif extension == '.bmp':
+                mime_type = 'image/bmp'
+            elif extension in ['.tiff', '.tif']:
+                mime_type = 'image/tiff'
+
+            # Serve the file as a downloadable attachment
+            return web.FileResponse(
+                path=image_path,
+                headers={
+                    "Content-Disposition": f"attachment; filename={os.path.basename(image_path)}",
+                    "Content-Type": mime_type
+                }
+            )
 
     def add_routes(self):
         self.user_manager.add_routes(self.routes)
@@ -694,3 +741,4 @@ class PromptServer():
                 logging.warning(traceback.format_exc())
 
         return json_data
+

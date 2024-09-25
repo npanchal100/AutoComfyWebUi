@@ -60,7 +60,7 @@ export class ComfyApp {
 		this.bodyRight = $el("div.comfyui-body-right", { parent: document.body });
 		this.bodyBottom = $el("div.comfyui-body-bottom", { parent: document.body });		  
 		this.menu = new ComfyAppMenu(this);
-
+		this.downloadUrls = [];
 		/**
 		 * List of extensions that are registered with the app
 		 * @type {ComfyExtension[]}
@@ -228,6 +228,44 @@ export class ComfyApp {
 			app.graph.setDirtyCanvas(true);
 		}
 	}
+	/**
+     * Triggers a download for the given URL
+     * @param {string} url - The URL of the file to download
+     */
+    triggerDownload(url) {
+        console.log(`Triggering download for URL: ${url}`); // Debug log
+
+        try {
+            // Create a temporary link element
+            const link = document.createElement('a');
+            link.href = url;
+
+            // Extract filename from URL or set a default name
+            const urlParts = url.split('/');
+            const filenameWithParams = urlParts[urlParts.length - 1];
+            const filename = filenameWithParams.split('?')[0] || 'download';
+            link.setAttribute('download', filename);
+            console.log(`Download filename set to: ${filename}`); // Debug log
+
+            // Append the link to the body
+            document.body.appendChild(link);
+            console.log('Download link appended to the DOM'); // Debug log
+
+            // Programmatically click the link to initiate download
+            link.click();
+            console.log('Download initiated by programmatically clicking the link'); // Debug log
+
+            // Remove the link from the document
+            document.body.removeChild(link);
+            console.log('Download link removed from the DOM'); // Debug log
+
+            // Optional: Show a success notification
+            //this.ui.dialog.show(`Download initiated for ${filename}`, { timeout: 3000 });
+        } catch (error) {
+            console.error("Download failed:", error); // Error log
+            this.ui.dialog.show("Failed to download image. Please try again.");
+        }
+    }
 
 	/**
 	 * Invoke an extension callback
@@ -1312,7 +1350,7 @@ export class ComfyApp {
 			return res;
 		};
 	}
-
+	
 	/**
 	 * Handles updates from the API socket
 	 */
@@ -1346,27 +1384,76 @@ export class ComfyApp {
 		});
 
 		api.addEventListener("executed", ({ detail }) => {
-			if (this.workflowManager.activePrompt ?.workflow
-				&& this.workflowManager.activePrompt.workflow !== this.workflowManager.activeWorkflow) return;
-			const output = this.nodeOutputs[detail.node];
-			if (detail.merge && output) {
-				for (const k in detail.output ?? {}) {
-					const v = output[k];
-					if (v instanceof Array) {
-						output[k] = v.concat(detail.output[k]);
-					} else {
-						output[k] = detail.output[k];
-					}
+            console.log("Executed event detail:", detail); // Added Debug log
+
+            if (this.workflowManager.activePrompt?.workflow
+                && this.workflowManager.activePrompt.workflow !== this.workflowManager.activeWorkflow) return;
+            
+            const output = this.nodeOutputs[detail.node];
+            if (detail.merge && output) {
+                for (const k in detail.output ?? {}) {
+                    const v = output[k];
+                    if (v instanceof Array) {
+                        output[k] = v.concat(detail.output[k]);
+                    } else {
+                        output[k] = detail.output[k];
+                    }
+                }
+            } else {
+                this.nodeOutputs[detail.node] = detail.output;
+            }
+            
+            const node = this.graph.getNodeById(detail.node);
+            if (node) {
+                if (node.onExecuted)
+                    node.onExecuted(detail.output);
+            }
+			// Additional Debug Logs
+			if (detail.ui) {
+				console.log("detail.ui exists:", detail.ui);
+				if (detail.ui.download_urls) {
+					console.log("detail.ui.download_urls:", detail.ui.download_urls);
+				} else {
+					console.log("detail.ui.download_urls does not exist.");
 				}
 			} else {
-				this.nodeOutputs[detail.node] = detail.output;
+				console.log("detail.ui does not exist.");
 			}
-			const node = this.graph.getNodeById(detail.node);
-			if (node) {
-				if (node.onExecuted)
-					node.onExecuted(detail.output);
+
+			if (detail.output) {
+				console.log("detail.output exists:", detail.output);
+				if (detail.output.download_urls) {
+					console.log("detail.output.download_urls:", detail.output.download_urls);
+				} else {
+					console.log("detail.output.download_urls does not exist.");
+				}
+			} else {
+				console.log("detail.output does not exist.");
 			}
-		});
+
+            // **Handle download URLs Automatically**
+			if (detail.ui && detail.ui.download_urls && detail.ui.download_urls.length > 0) {
+				console.log("Received download URLs from server via ui:", detail.ui.download_urls); // Debug log
+				detail.ui.download_urls.forEach((url, index) => {
+					console.log(`Initiating download ${index + 1} of ${detail.ui.download_urls.length}: ${url}`); // Debug log
+					this.triggerDownload(url);
+				});
+
+				// Optionally, clear the download URLs after initiating downloads
+				this.downloadUrls = [];
+			} else if (detail.output && detail.output.download_urls && detail.output.download_urls.length > 0) {
+				console.log("Received download URLs from server via output:", detail.output.download_urls); // Debug log
+				detail.output.download_urls.forEach((url, index) => {
+					console.log(`Initiating download ${index + 1} of ${detail.output.download_urls.length}: ${url}`); // Debug log
+					this.triggerDownload(url);
+				});
+
+				// Optionally, clear the download URLs after initiating downloads
+				this.downloadUrls = [];
+			} else {
+				console.log("No download URLs received in the executed event."); // Debug log
+			}
+        });
 
 		api.addEventListener("execution_start", ({ detail }) => {
 			this.runningNodeId = null;
@@ -1859,17 +1946,20 @@ export class ComfyApp {
 	async loadGraphData(graphData, clean = true, restore_view = true, workflow = null) {
 		if (clean !== false) {
 			this.clean();
+			console.log("Graph cleaned before loading new data.");
 		}
 
 		let reset_invalid_values = false;
 		if (!graphData) {
 			graphData = defaultGraph;
 			reset_invalid_values = true;
+			console.log("No graph data provided. Loaded default graph.");
 		}
 
 		if (typeof structuredClone === "undefined")
 		{
 			graphData = JSON.parse(JSON.stringify(graphData));
+
 		}else
 		{
 			graphData = structuredClone(graphData);
@@ -1877,6 +1967,7 @@ export class ComfyApp {
 	
 		try {
 			this.workflowManager.setWorkflow(workflow);
+			console.log("Workflow set to:", workflow); // Debug log
 		} catch (error) {
 			console.error(error);
 		}
@@ -1893,11 +1984,13 @@ export class ComfyApp {
 			if (!(n.type in LiteGraph.registered_node_types)) {
 				missingNodeTypes.push(n.type);
 				n.type = sanitizeNodeName(n.type);
+				console.warn(`Missing node type detected and sanitized: ${n.type}`);
 			}
 		}
 
 		try {
 			this.graph.configure(graphData);
+			console.log("Graph configured with new data.");
 			if (restore_view && this.enableWorkflowViewRestore.value && graphData.extra?.ds) {
 				this.canvas.ds.offset = graphData.extra.ds.offset;
 				this.canvas.ds.scale = graphData.extra.ds.scale;
@@ -2258,6 +2351,7 @@ export class ComfyApp {
 	 * @param {File} file
 	 */
 	async handleFile(file) {
+		console.log(`Handling file upload: ${file.name}, type: ${file.type}`);
 		const removeExt = f => {
 			if(!f) return f;
 			const p = f.lastIndexOf(".");
@@ -2266,6 +2360,7 @@ export class ComfyApp {
 		};
 
 		const fileName = removeExt(file.name);
+		console.log(`File name after removing extension: ${fileName}`); 
 		if (file.type === "image/png") {
 			const pngInfo = await getPngMetadata(file);
 			if (pngInfo?.workflow) {
